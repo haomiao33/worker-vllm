@@ -8,16 +8,6 @@
   "config": {
     "runsOn": "GPU",
     "gpuCount": 1,
-    "containerDiskInGb": 20,
-    "presets": [
-      {
-        "name": "T4 Default",
-        "defaults": {
-          "MODEL_PATH": "Qwen/Qwen-Image",
-          "LORA_PATH": "lightx2v/Qwen-Image-Lightning",
-          "LORA_WEIGHT": "Qwen-Image-Lightning-8steps-V1.0.safetensors"
-        }
-      }
-    ]
+    "containerDiskInGb": 20
   }
 }

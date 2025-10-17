@@ -1,59 +1,67 @@
 import io
-import os
 import base64
 import torch
+import requests
 from PIL import Image
 from diffusers import DiffusionPipeline, FlowMatchEulerDiscreteScheduler
 import runpod
-import requests
 
-# === 读取环境变量（RunPod 在启动时注入） ===
-MODEL_PATH = os.getenv("MODEL_PATH", "Qwen/Qwen-Image")
-LORA_PATH = os.getenv("LORA_PATH", "lightx2v/Qwen-Image-Lightning")
-LORA_WEIGHT = os.getenv("LORA_WEIGHT", "Qwen-Image-Lightning-8steps-V1.0.safetensors")
+# 模型本地路径（Docker 构建时已下载）
+MODEL_PATH = "./Qwen-Image-Edit-Lightning"
 
-print(f"🔹 Loading model from: {MODEL_PATH}")
-scheduler = FlowMatchEulerDiscreteScheduler.from_config(MODEL_PATH)
-
+print("⏳ Loading model from local path...")
+scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(MODEL_PATH, subfolder="scheduler")
 pipe = DiffusionPipeline.from_pretrained(
     MODEL_PATH,
-    scheduler=scheduler,
-    torch_dtype=torch.bfloat16
-)
+    torch_dtype=torch.float16,
+    scheduler=scheduler
+).to("cuda")
+pipe.scheduler.set_timesteps(8)
+pipe.set_progress_bar_config(disable=True)
+print("✅ Model loaded and ready.")
 
-print(f"🔹 Loading LoRA: {LORA_PATH}")
-pipe.load_lora_weights(LORA_PATH, weight_name=LORA_WEIGHT)
-pipe.to("cuda")
-pipe.enable_xformers_memory_efficient_attention()
 
-# === 主处理函数 ===
-def handler(event):
-    input_data = event.get("input", {})
-    image_url = input_data.get("image_url")
+def download_image(url: str) -> Image.Image:
+    """从 URL 下载图片"""
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+    return img
 
-    if not image_url:
-        return {"error": "Missing 'image_url' in input"}
 
-    resp = requests.get(image_url)
-    image = Image.open(io.BytesIO(resp.content)).convert("RGB")
+def process(job):
+    data = job["input"]
 
-    # 推理
-    with torch.autocast("cuda"):
+    try:
+        prompt = data.get("prompt", "enhance image quality, realistic lighting")
+        image_url = data.get("image_url")
+        if not image_url:
+            return {"error": "missing image_url"}
+
+        # 下载输入图
+        image = download_image(image_url)
+
+        # 可选 mask_url
+        mask_url = data.get("mask_url")
+        mask = download_image(mask_url) if mask_url else None
+
+        # 执行编辑推理
         result = pipe(
-            prompt="product photo with clean isolated subject, no background",
-            negative_prompt="background, clutter, shadows, multiple objects",
+            prompt=prompt,
             image=image,
-            num_inference_steps=8,
-            width=1024,
-            height=1024,
+            mask_image=mask,
+            num_inference_steps=8
         ).images[0]
 
-    # 输出 base64
-    buf = io.BytesIO()
-    result.save(buf, format="PNG")
-    encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+        # 输出 base64
+        buf = io.BytesIO()
+        result.save(buf, format="PNG")
+        output_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-    return {"status": "success", "image_base64": encoded}
+        return {"output_image": output_b64}
 
-# === 启动 RunPod Serverless handler ===
-runpod.serverless.start({"handler": handler})
+    except Exception as e:
+        return {"error": str(e)}
+
+
+runpod.serverless.start({"handler": process})

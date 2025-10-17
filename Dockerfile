@@ -5,14 +5,14 @@ RUN apt-get update -y \
 
 RUN ldconfig /usr/local/cuda-12.1/compat/
 
-# Install Python dependencies
-COPY requirements.txt /requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install --upgrade pip && \
-    python3 -m pip install --upgrade -r /requirements.txt
+WORKDIR /app
+COPY requirements.txt .
 
-# 安装依赖
-COPY app.py .
+RUN pip install -U pip && pip install -r requirements.txt
 
-# Start the handler
+# 下载模型到本地目录，避免冷启动
+RUN huggingface-cli download lightx2v/Qwen-Image-Edit-Lightning-8step-V2.0 --local-dir ./Qwen-Image-Edit-Lightning
+
+COPY app.py /app
+
 CMD ["python3", "app.py"]
